@@ -197,9 +197,8 @@ reapStaleEntries destroy idleTime poolStates alarmClock = do
       unless (null stale) $ do
         writeTVar entries fresh
         modifyTVar_ inUse (subtract (length stale))
-      if null fresh
-        then return ()
-        else setAlarmSTM alarmClock $ addUTCTime idleTime $ minimum $ map lastUse fresh
+      unless (null fresh) $
+        setAlarmSTM alarmClock $ addUTCTime idleTime $ minimum $ map lastUse fresh
       return (map entry stale)
     forM_ resources $ \resource -> do
       destroy resource `E.catch` \(_::SomeException) -> return ()
