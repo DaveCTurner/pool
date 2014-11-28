@@ -192,14 +192,15 @@ reapStaleEntries destroy idleTime poolStates alarmClock = do
   now <- getCurrentTime
   let isStale Entry{..} = now `diffUTCTime` lastUse > idleTime
   V.forM_ poolStates $ \(inUse, entries) -> do
-    (resources, setNextUpdate) <- atomically $ do
+    resources <- atomically $ do
       (stale,fresh) <- partition isStale <$> readTVar entries
       unless (null stale) $ do
         writeTVar entries fresh
         modifyTVar_ inUse (subtract (length stale))
-      return ( map entry stale
-             , if null fresh then return () else setAlarm alarmClock $ addUTCTime idleTime $ minimum $ map lastUse fresh)
-    setNextUpdate
+      if null fresh
+        then return ()
+        else setAlarmSTM alarmClock $ addUTCTime idleTime $ minimum $ map lastUse fresh
+      return $ map entry stale
     forM_ resources $ \resource -> do
       destroy resource `E.catch` \(_::SomeException) -> return ()
 
