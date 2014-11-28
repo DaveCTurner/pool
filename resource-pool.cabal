@@ -38,7 +38,7 @@ library
     stm >= 2.3,
     time,
     vector >= 0.7,
-    alarmclock >= 0.2
+    alarmclock >= 0.2.0.3
 
   if flag(developer)
     ghc-options: -Werror

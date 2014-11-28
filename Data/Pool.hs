@@ -41,14 +41,14 @@ module Data.Pool
     , destroyAllResources
     ) where
 
-import Control.Applicative ((<$>))
+import Control.Applicative ((<$>), (<*>))
 import Control.Concurrent (myThreadId)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, onException)
-import Control.Monad (forM_, join, liftM3, unless, when)
+import Control.Monad (forM_, join, unless, when)
 import Control.Concurrent.AlarmClock
 import Data.Hashable (hash)
-import Data.IORef (IORef, newIORef, mkWeakIORef, readIORef, writeIORef)
+import Data.IORef (IORef, newIORef, mkWeakIORef)
 import Data.List (partition)
 import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime, addUTCTime)
 import Data.Typeable (Typeable)
@@ -82,7 +82,7 @@ data Entry a = Entry {
 
 -- | A single striped pool.
 data LocalPool a = LocalPool {
-      setLastUsedTime :: UTCTime -> IO ()
+      setLastUsedTime :: UTCTime -> STM ()
     -- ^ Record the last-used time of a resource, to request a reaper wakeup.
     , inUse :: TVar Int
     -- ^ Count of open entries (both idle and in use).
@@ -160,12 +160,17 @@ createPool create destroy numStripes idleTime maxResources = do
     modError "pool " $ "invalid idle time " ++ show idleTime
   when (maxResources < 1) $
     modError "pool " $ "invalid maximum resource count " ++ show maxResources
-  handleSetLastUsedTimeVar <- newIORef undefined
-  let handleSetLastUsedTime = \t -> do {a <- readIORef handleSetLastUsedTimeVar; a t}
-  localPools <- V.replicateM numStripes $
-                liftM3 (LocalPool handleSetLastUsedTime) (newTVarIO 0) (newTVarIO []) (newIORef ())
-  alarmClock <- newAlarmClock $ reapStaleEntries destroy idleTime localPools
-  writeIORef handleSetLastUsedTimeVar $ setAlarm alarmClock . addUTCTime idleTime
+
+  localPoolStates <- V.replicateM numStripes $ (,) <$> newTVarIO 0 <*> newTVarIO []
+  alarmClock <- newAlarmClock $ reapStaleEntries destroy idleTime localPoolStates
+
+  let handleSetLastUsedTime t = do
+        isSet <- isAlarmSetSTM alarmClock
+        unless isSet $ setAlarmSTM alarmClock $ addUTCTime idleTime t
+
+  localPools <- V.forM localPoolStates $ \(inUse, entries) ->
+    LocalPool handleSetLastUsedTime inUse entries <$> newIORef ()
+
   fin <- newIORef ()
   let p = Pool {
             create
@@ -182,11 +187,11 @@ createPool create destroy numStripes idleTime maxResources = do
 
 -- | Periodically go through all pools, closing any resources that
 -- have been left idle for too long.
-reapStaleEntries :: (a -> IO ()) -> NominalDiffTime -> V.Vector (LocalPool a) -> AlarmClock -> IO ()
-reapStaleEntries destroy idleTime pools alarmClock = do
+reapStaleEntries :: (a -> IO ()) -> NominalDiffTime -> V.Vector (TVar Int, TVar [Entry a]) -> AlarmClock -> IO ()
+reapStaleEntries destroy idleTime poolStates alarmClock = do
   now <- getCurrentTime
   let isStale Entry{..} = now `diffUTCTime` lastUse > idleTime
-  V.forM_ pools $ \LocalPool{..} -> do
+  V.forM_ poolStates $ \(inUse, entries) -> do
     (resources, setNextUpdate) <- atomically $ do
       (stale,fresh) <- partition isStale <$> readTVar entries
       unless (null stale) $ do
@@ -344,8 +349,9 @@ destroyResource Pool{..} LocalPool{..} resource = do
 putResource :: LocalPool a -> a -> IO ()
 putResource LocalPool{..} resource = do
     now <- getCurrentTime
-    setLastUsedTime now
-    atomically $ modifyTVar_ entries (Entry resource now:)
+    atomically $ do
+      modifyTVar_ entries (Entry resource now:)
+      setLastUsedTime now
 #if __GLASGOW_HASKELL__ >= 700
 {-# INLINABLE putResource #-}
 #endif
