@@ -82,12 +82,12 @@ data Entry a = Entry {
 
 -- | A single striped pool.
 data LocalPool a = LocalPool {
-      setLastUsedTime :: UTCTime -> STM ()
-    -- ^ Record the last-used time of a resource, to request a reaper wakeup.
-    , inUse :: TVar Int
+      inUse :: TVar Int
     -- ^ Count of open entries (both idle and in use).
     , entries :: TVar [Entry a]
     -- ^ Idle entries.
+    , setLastUsedTime :: UTCTime -> STM ()
+    -- ^ Record the last-used time of a resource, to request a reaper wakeup.
     , lfin :: IORef ()
     -- ^ empty value used to attach a finalizer to (internal)
     } deriving (Typeable)
@@ -169,7 +169,7 @@ createPool create destroy numStripes idleTime maxResources = do
         unless isSet $ setAlarmSTM alarmClock $ addUTCTime idleTime t
 
   localPools <- V.forM localPoolStates $ \(inUse, entries) ->
-    LocalPool handleSetLastUsedTime inUse entries <$> newIORef ()
+    LocalPool inUse entries handleSetLastUsedTime <$> newIORef ()
 
   fin <- newIORef ()
   let p = Pool {
