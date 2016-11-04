@@ -41,7 +41,6 @@ module Data.Pool
     , destroyAllResources
     ) where
 
-import Control.Applicative ((<$>), (<*>))
 import Control.Concurrent (myThreadId)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, onException)
